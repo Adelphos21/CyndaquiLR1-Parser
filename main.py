@@ -5,7 +5,7 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
 try:
-    from analyzer import LR1Analyzer, ASTNode
+    from analyzer import LR1Analyzer, ASTNode, serialize_ast_to_graph
 except ImportError:
     print("ERROR: No se pudo encontrar el archivo 'analyzer.py'.")
     exit()
@@ -52,16 +52,23 @@ async def run_analysis(request_data: AnalysisRequest):
         # Ejecutar el analizador LR(1)
         analyzer = LR1Analyzer(request_data.grammar)
         results = analyzer.analyze(request_data.input_string)
-        
-        # Limpiar los resultados para que sean serializables en JSON
-        
-        if results.get("ast"):
-            # Convertimos el AST a su representación en string
-            results["ast"] = str(results["ast"])
-        else:
-            results["ast"] = "No se generó AST."
 
-        # Convertimos los defaultdicts a dicts normales
+        ast_object = results.get("ast")
+
+        if ast_object:
+            # Creamos la representación de texto (como antes)
+            results["ast_string"] = str(ast_object)
+            # Creamos la nueva representación de GRAFO
+            results["ast_graph"] = serialize_ast_to_graph(ast_object)
+            # Borramos el objeto AST original (que no es JSON serializable)
+            del results["ast"]
+        else:
+            results["ast_string"] = "No se generó AST."
+            # Devolvemos un grafo vacío
+            results["ast_graph"] = {"nodes": [], "edges": []}
+            if "ast" in results:
+                del results["ast"]
+        
         results["action_table"] = dict(results["action_table"])
         results["goto_table"] = dict(results["goto_table"])
 

@@ -554,3 +554,47 @@ C -> d
         print(f"\nERROR: {e}")
     except Exception as e:
         print(f"\nERROR Inesperado durante el análisis: {e}")
+
+def serialize_ast_to_graph(root_node: ASTNode):
+    """
+    Recorre el AST (generado por ASTNode) y lo convierte en un formato de grafo
+    (lista de nodos y lista de aristas)
+    """
+    nodes = []
+    edges = []
+    _counter = 0
+
+    def traverse(node, parent_id=None):
+        nonlocal _counter
+        current_id = _counter
+        _counter += 1
+
+        # Formatear la etiqueta del nodo
+        node_label = node.symbol
+        if node.value:
+            # \n es interpretado por muchas librerías de grafos como un salto de línea
+            node_label += f"\n({node.value})"
+        
+        # Añadir el nodo a la lista
+        nodes.append({
+            "id": current_id, 
+            "label": node_label
+        })
+
+        # Si no es la raíz, crear un enlace desde su padre
+        if parent_id is not None:
+            edges.append({
+                "from": parent_id, 
+                "to": current_id
+            })
+        
+        # Recorrer los hijos
+        for child in node.children:
+            if isinstance(child, ASTNode):
+                traverse(child, current_id)
+    
+    # Iniciar el recorrido desde el nodo raíz
+    if root_node:
+        traverse(root_node)
+        
+    return {"nodes": nodes, "edges": edges}
