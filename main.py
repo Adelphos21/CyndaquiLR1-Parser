@@ -84,5 +84,7 @@ async def run_analysis(request_data: AnalysisRequest):
             status_code=500,
             detail=f"Error inesperado en el análisis: {e}"
         )
+    
+handler = Mangum(app)
 
 # uvicorn main:app --reload
