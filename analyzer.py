@@ -2,12 +2,13 @@
 """
 Generador de Tablas y Parser LR(1) en Python.
 
-La lógica está encapsulada en la clase LR1Analyzer, permitiendo 
-que la gramática y la cadena de entrada sean proporcionadas por el usuario 
+La lógica está encapsulada en la clase LR1Analyzer, permitiendo
+que la gramática y la cadena de entrada sean proporcionadas por el usuario
 (o un frontend), haciendo el código más modular y reutilizable.
 """
 import collections
 import sys
+import re  # <--- MEJORA: Importar re para tokenización
 
 # Definiciones de Símbolos Globales
 EOF = "$"
@@ -35,13 +36,16 @@ class ASTNode:
             if isinstance(child, ASTNode):
                 result += child._to_string(level + 1)
             else:
-                result += f"{indent}  {child}\n"
+                # Si el hijo no es un nodo, es un token terminal
+                result += f"{indent}  {child.symbol}\n"
         return result
+
 
 class LR1Analyzer:
     """
     Clase para manejar todo el proceso de análisis LR(1) para una gramática dada.
     """
+
     def __init__(self, grammar_str):
         self.grammar_str = grammar_str
         self.GRAMMAR = []  # Lista de tuplas: (NoTerminal, [Producción])
@@ -49,6 +53,7 @@ class LR1Analyzer:
         self.TERMINALS = set()
         self.START_SYMBOL = None
         self.FIRST = collections.defaultdict(set)
+        self.ast = None
 
         # 1. Inicializar y Aumentar la Gramática
         self._initialize_grammar()
@@ -62,20 +67,21 @@ class LR1Analyzer:
         rules = []
         non_terminals = set()
         all_symbols = set()
-        
+
         # Formato de entrada esperado: E -> T + E | T (una regla por línea)
         for line in self.grammar_str.strip().split('\n'):
             if not line.strip(): continue
-            
+
             try:
                 nt_part, prods_part = line.split('->', 1)
                 non_terminal = nt_part.strip()
                 non_terminals.add(non_terminal)
-                
+
                 prods = [p.strip().split() for p in prods_part.split('|')]
-                
+
                 for prod in prods:
-                    if prod == [EMPTY]:
+                    # <--- FIX 1: Manejar explícitamente '' como símbolo de épsilon
+                    if prod == ["''"]:
                         rules.append((non_terminal, [EMPTY]))
                     else:
                         rules.append((non_terminal, prod))
@@ -85,7 +91,7 @@ class LR1Analyzer:
 
         if not rules:
             raise ValueError("La gramática no puede estar vacía.")
-            
+
         # Determinar el Símbolo Inicial (el no-terminal de la primera regla)
         self.START_SYMBOL = rules[0][0]
 
@@ -93,7 +99,7 @@ class LR1Analyzer:
         start_prime = self.START_SYMBOL + "'"
         self.GRAMMAR.append((start_prime, [self.START_SYMBOL]))
         self.NON_TERMINALS.add(start_prime)
-        
+
         # Añadir el resto de reglas (manteniendo el orden para indexación)
         self.GRAMMAR.extend(rules)
         self.NON_TERMINALS.update(non_terminals)
@@ -101,29 +107,31 @@ class LR1Analyzer:
         # 2. Determinar Terminales
         self.TERMINALS = (all_symbols - self.NON_TERMINALS)
         if EMPTY in self.TERMINALS:
-             self.TERMINALS.remove(EMPTY)
+            self.TERMINALS.remove(EMPTY)
         self.TERMINALS.add(EOF)
-        
+
         # Ordenar para consistencia
-        self.NON_TERMINALS = sorted(list(self.NON_TERMINALS), reverse=True) # E' primero
+        self.NON_TERMINALS = sorted(list(self.NON_TERMINALS), reverse=True)
         self.TERMINALS = sorted(list(self.TERMINALS))
 
     def _initialize_grammar(self):
         """Inicializa los sets y la gramática aumentada."""
         self._parse_grammar_string()
-        
+
     def _calculate_first_sets(self):
         """Calcula el conjunto FIRST para todos los símbolos."""
-        
+
         # Inicialización con terminales
         for t in self.TERMINALS:
             self.FIRST[t].add(t)
+
+        self.FIRST[EMPTY].add(EMPTY)  # Asegurar que EMPTY tiene su propio conjunto FIRST
 
         changed = True
         while changed:
             changed = False
             for A, production in self.GRAMMAR:
-                
+
                 # 1. Si A -> ε
                 if production == [EMPTY]:
                     if EMPTY not in self.FIRST[A]:
@@ -133,9 +141,9 @@ class LR1Analyzer:
 
                 # 2. Si A -> X1 X2 ... Xk
                 for X in production:
-                    if X not in self.FIRST: # Símbolo no reconocido, podría ser un error de gramática
+                    if X not in self.FIRST:  # Símbolo no reconocido, podría ser un error de gramática
                         continue
-                        
+
                     old_size = len(self.FIRST[A])
                     self.FIRST[A].update(self.FIRST[X] - {EMPTY})
                     if len(self.FIRST[A]) != old_size:
@@ -149,17 +157,19 @@ class LR1Analyzer:
                     if EMPTY not in self.FIRST[A]:
                         self.FIRST[A].add(EMPTY)
                         changed = True
-    
+
     # --- Clase Item (Anidada para acceso a la gramática) ---
 
     class LR1Item:
         """Representa un ítem LR(1). Se inicializa con el objeto Analyzer para acceder a GRAMMAR."""
+
         def __init__(self, rule_index, dot_position, lookahead, analyzer):
             self.rule_index = rule_index
             self.dot_position = dot_position
             self.lookahead = lookahead
-            self.non_terminal = analyzer.GRAMMAR[rule_index][0]
-            self.production = analyzer.GRAMMAR[rule_index][1]
+            self.analyzer = analyzer
+            self.non_terminal = self.analyzer.GRAMMAR[rule_index][0]
+            self.production = self.analyzer.GRAMMAR[rule_index][1]
 
         def is_final(self):
             return self.dot_position >= len(self.production) or self.production == [EMPTY]
@@ -170,10 +180,12 @@ class LR1Analyzer:
             return self.production[self.dot_position]
 
         def to_string(self):
-            prod = self.production[:]
-            if prod != [EMPTY]:
-                prod.insert(self.dot_position, "•")
-            return f"[{self.non_terminal} -> {' '.join(prod)}, {self.lookahead}]"
+            prod_display = self.production[:]
+            if prod_display == [EMPTY]:
+                prod_display = ["ε"]
+
+            prod_display.insert(self.dot_position, "•")
+            return f"[{self.non_terminal} -> {' '.join(prod_display)}, {self.lookahead}]"
 
         def __eq__(self, other):
             return (self.rule_index == other.rule_index and
@@ -182,49 +194,45 @@ class LR1Analyzer:
 
         def __hash__(self):
             return hash((self.rule_index, self.dot_position, self.lookahead))
-            
+
     # --- Métodos de Transición ---
 
     def _closure(self, I):
         """Calcula el cierre (closure) del conjunto de ítems I."""
         J = set(I)
-        changed = True
-        while changed:
-            changed = False
-            new_items = set()
+        worklist = list(I)  # Usar una lista de trabajo en lugar de bucles anidados
 
-            for item in J:
-                X = item.next_symbol()
-                if X is None or X in self.TERMINALS:
-                    continue
+        while worklist:
+            item = worklist.pop(0)
 
-                # Regla: [A -> alpha . X beta, a]
+            X = item.next_symbol()
+            if X is None or X in self.TERMINALS:
+                continue
 
-                beta_symbols = item.production[item.dot_position + 1:]
-                
-                # 1. Calcular First(beta a)
-                first_beta_a = set()
-                epsilon_in_beta = True
-                
-                for B in beta_symbols:
-                    first_beta_a.update(self.FIRST[B] - {EMPTY})
-                    if EMPTY not in self.FIRST[B]:
-                        epsilon_in_beta = False
-                        break
-                
-                if epsilon_in_beta:
-                    first_beta_a.add(item.lookahead)
+            # Regla: [A -> alpha . X beta, a]
+            beta_symbols = item.production[item.dot_position + 1:]
 
-                # 2. Aplicar la regla: para cada producción X -> gamma y cada b en First(beta a)
-                for rule_index, (nt, production) in enumerate(self.GRAMMAR):
-                    if nt == X:
-                        for b in first_beta_a:
-                            new_item = self.LR1Item(rule_index, 0, b, self)
-                            if new_item not in J:
-                                new_items.add(new_item)
-                                changed = True
-            
-            J.update(new_items)
+            # 1. Calcular First(beta a)
+            first_beta_a = set()
+            epsilon_in_beta = True
+
+            for B in beta_symbols:
+                first_beta_a.update(self.FIRST[B] - {EMPTY})
+                if EMPTY not in self.FIRST[B]:
+                    epsilon_in_beta = False
+                    break
+
+            if epsilon_in_beta:
+                first_beta_a.add(item.lookahead)
+
+            # 2. Aplicar la regla: para cada producción X -> gamma y cada b en First(beta a)
+            for rule_index, (nt, production) in enumerate(self.GRAMMAR):
+                if nt == X:
+                    for b in first_beta_a:
+                        new_item = self.LR1Item(rule_index, 0, b, self)
+                        if new_item not in J:
+                            J.add(new_item)
+                            worklist.append(new_item)
         return J
 
     def _goto(self, I, X):
@@ -238,48 +246,56 @@ class LR1Analyzer:
         return self._closure(J)
 
     # --- Generación de Tablas ---
-    
+
     def _build_canonical_collection(self):
         """Construye la colección canónica C y la tabla de transiciones GOTO."""
         # Ítem inicial: [S' -> . S, $]
         initial_item = self.LR1Item(0, 0, EOF, self)
         I0 = self._closure({initial_item})
-        
+
         C = [I0]
+        # <--- MEJORA: Usar un mapa de frozenset para búsqueda O(1) en lugar de O(n) con C.index()
+        states_map = {frozenset(I0): 0}
+
         goto_map = {}  # { (state_index, symbol): new_state_index }
-        
-        # Símbolos de transición: todos los Terminales (excepto $) y No-Terminales
-        symbols = [s for s in self.NON_TERMINALS if s != self.GRAMMAR[0][0]] + [s for s in self.TERMINALS if s != EOF]
-        
-        queue = collections.deque([I0])
-        
+
+        # Símbolos de transición: todos los Terminales y No-Terminales
+        symbols = self.NON_TERMINALS + self.TERMINALS
+
+        queue = collections.deque([0])  # Cola de índices de estados
+
         while queue:
-            I = queue.popleft()
-            i = C.index(I)
+            i = queue.popleft()
+            I = C[i]
 
             for X in symbols:
+                if X == EOF or X == EMPTY: continue
                 J = self._goto(I, X)
-                
+
                 if not J:
                     continue
 
-                if J not in C:
+                J_frozen = frozenset(J)
+                if J_frozen not in states_map:
+                    j = len(C)
+                    states_map[J_frozen] = j
                     C.append(J)
-                    queue.append(J)
-                
-                j = C.index(J)
+                    queue.append(j)
+                else:
+                    j = states_map[J_frozen]
+
                 goto_map[(i, X)] = j
-        
+
         return C, goto_map
-    
+
     def _generate_parsing_tables(self, C, goto_map):
         """Genera las tablas ACTION y GOTO a partir de la colección canónica C."""
-        
+
         action_table = collections.defaultdict(dict)
         goto_output_table = collections.defaultdict(dict)
-        
+
         for i, I in enumerate(C):
-            
+
             # 4. Tabla GOTO (No-Terminales)
             for nt in self.NON_TERMINALS:
                 if nt != self.GRAMMAR[0][0] and (i, nt) in goto_map:
@@ -287,22 +303,22 @@ class LR1Analyzer:
                     goto_output_table[i][nt] = j
 
             # Recolectar todas las acciones potenciales para este estado i
-            potential_actions = collections.defaultdict(list) # {terminal: [acciones]}
+            potential_actions = collections.defaultdict(list)  # {terminal: [acciones]}
 
             for item in I:
                 t = item.next_symbol()
-                
+
                 # Caso 1: Acción de Desplazamiento (Shift)
                 if t in self.TERMINALS and t != EOF:
                     if (i, t) in goto_map:
                         j = goto_map[(i, t)]
                         potential_actions[t].append(f"s{j}")
-                
+
                 # Caso 2: Acción de Reducción/Aceptación
                 elif item.is_final():
                     a = item.lookahead
-                    
-                    if item.rule_index == 0:
+
+                    if item.rule_index == 0:  # S' -> S .
                         # Aceptación
                         potential_actions[EOF].append("acc")
                     else:
@@ -312,29 +328,28 @@ class LR1Analyzer:
 
             # Procesar acciones potenciales y detectar conflictos
             for terminal, actions in potential_actions.items():
-                # Eliminar acciones duplicadas (varios ítems causan el mismo Shift)
-                unique_actions = sorted(list(set(actions))) 
+                unique_actions = sorted(list(set(actions)))
 
+                # <--- FIX 2: Lanzar un error en caso de conflicto en lugar de resolverlo
                 if len(unique_actions) > 1:
-                    # CONFLICTO VERDADERO: S/R o R/R
-                    conflict_type = "S/R" if any(a.startswith('s') for a in unique_actions) and any(a.startswith('r') for a in unique_actions) else "R/R"
-                    
-                    print(f"¡ADVERTENCIA DE CONFLICTO! Estado {i}, Terminal '{terminal}'. Tipo: {conflict_type}. Acciones: {', '.join(unique_actions)}")
-                    print(f"   --> Seleccionando la primera acción: {unique_actions[0]}")
-                    action_table[i][terminal] = unique_actions[0]
-                    
+                    conflict_type = "Shift/Reduce" if any(a.startswith('s') for a in unique_actions) and any(
+                        a.startswith('r') for a in unique_actions) else "Reduce/Reduce"
+                    raise ValueError(
+                        f"CONFLICTO {conflict_type} detectado en el estado {i} con el terminal '{terminal}'. "
+                        f"Acciones conflictivas: {', '.join(unique_actions)}. La gramática no es LR(1)."
+                    )
+
                 elif len(unique_actions) == 1:
                     # Acción única (Shift, Reduce, o Accept)
                     action_table[i][terminal] = unique_actions[0]
-                
-                    
+
         return action_table, goto_output_table
 
     # --- Driver de Parsing ---
 
-    def _parse_input(self, input_string, action_table, goto_table):
+    def _parse_input(self, input_tokens, action_table, goto_table):
         """Simula el proceso de parsing con las tablas generadas y construye el AST."""
-        input_tokens = input_string.split() + [EOF]
+        input_tokens.append(EOF)
         stack = [0]
         value_stack = []  # Pila para construir el AST
         pointer = 0
@@ -345,8 +360,8 @@ class LR1Analyzer:
             current_token = input_tokens[pointer]
             action = action_table.get(current_state, {}).get(current_token)
 
-            stack_str = " ".join(map(str, stack))
-            input_str = " ".join(input_tokens[pointer:])
+            stack_str = ' '.join(str(s) for s in stack)
+            input_str = ' '.join(input_tokens[pointer:])
 
             trace.append({
                 "stack": stack_str,
@@ -360,49 +375,35 @@ class LR1Analyzer:
                 break
 
             if action.startswith('s'):
-                # Shift (Desplazamiento) - Crear nodo hoja para terminal
+                # Shift (Desplazamiento)
                 next_state = int(action[1:])
                 stack.append(current_token)
                 stack.append(next_state)
-
-                # Apilar nodo hoja en value_stack
                 value_stack.append(ASTNode(current_token))
                 pointer += 1
 
             elif action.startswith('r'):
-                # Reduce (Reducción) - Construir nodo del AST
+                # Reduce (Reducción)
                 rule_index = int(action[1:])
                 nt, prod = self.GRAMMAR[rule_index]
-                prod_len = len(prod)
+                prod_len = len(prod) if prod != [EMPTY] else 0
 
-                # Ajuste para producciones epsilon
-                if prod_len == 1 and prod[0] == EMPTY:
-                    prod_len = 0
-                    # Para epsilon, crear nodo con hijos vacíos
-                    new_node = ASTNode(nt)
-                else:
-                    # Extraer hijos de la pila de valores
-                    children = []
-                    for _ in range(prod_len):
-                        # Sacar 2 elementos de la pila principal por cada símbolo
-                        stack.pop()  # estado
-                        stack.pop()  # símbolo
-                        # Sacar nodo de value_stack
-                        if value_stack:
-                            children.insert(0, value_stack.pop())
+                children = []
+                for _ in range(prod_len):
+                    stack.pop()  # estado
+                    stack.pop()  # símbolo
+                    if value_stack:
+                        children.insert(0, value_stack.pop())
 
-                    # Crear nuevo nodo con los hijos
-                    new_node = ASTNode(nt, children)
-
-                # Apilar el nuevo nodo
+                new_node = ASTNode(nt, children)
                 value_stack.append(new_node)
 
-                # Actualizar pila principal con el no terminal
                 prev_state = stack[-1]
                 next_state = goto_table.get(prev_state, {}).get(nt)
+
                 if next_state is None:
                     trace.append({
-                        "stack": " ".join(map(str, stack)),
+                        "stack": ' '.join(str(s) for s in stack),
                         "input": input_str,
                         "action": f"ERROR: No hay GOTO definido en estado {prev_state} con no-terminal '{nt}'."
                     })
@@ -414,7 +415,6 @@ class LR1Analyzer:
 
             elif action == 'acc':
                 trace[-1]["action"] = "ACEPTADO"
-                # El AST final está en value_stack[0]
                 if value_stack:
                     self.ast = value_stack[0]
                 break
@@ -428,6 +428,10 @@ class LR1Analyzer:
     def analyze(self, input_string):
         """Ejecuta el análisis LR(1) completo y retorna un diccionario de resultados."""
 
+        # <--- FIX 3: Tokenizer mejorado
+        # Separa operadores, paréntesis, llaves, etc., pero mantiene literales de texto.
+        tokens = re.findall(r'\"[^"]*\"|\b\w+\b|[(){};,=\+\-\*\/]', input_string)
+
         # 1. Construir la Colección Canónica
         C, GOTO_MAP = self._build_canonical_collection()
 
@@ -435,7 +439,7 @@ class LR1Analyzer:
         ACTION_TABLE, GOTO_TABLE = self._generate_parsing_tables(C, GOTO_MAP)
 
         # 3. Demostración de Parsing
-        parse_trace = self._parse_input(input_string, ACTION_TABLE, GOTO_TABLE)
+        parse_trace = self._parse_input(tokens, ACTION_TABLE, GOTO_TABLE)
 
         # 4. Formatear la Salida para impresión/frontend
 
@@ -457,25 +461,66 @@ class LR1Analyzer:
             "goto_table": GOTO_TABLE,
             "trace": parse_trace,
             "num_states": len(C),
-            "ast": getattr(self, 'ast', None)  # Incluir el AST en los resultados
+            "ast": self.ast
         }
 
+
 # --- 8. Ejecución Principal con Input de Usuario ---
-    
+if __name__ == "__main__":
     # --- PARTE 1: DEFINICIÓN DE LA GRAMÁTICA Y CADENA DE ENTRADA ---
-    
-    # Define la gramática usando el formato: NT -> Prod1 | Prod2
-    # Cada regla principal debe ir en una nueva línea.
-    
-    # Gramática de ejemplo (para expresiones aritméticas)
     GRAMMAR_INPUT = """
-S -> C C
-C -> c C
-C -> d
+    Programa -> Items
+    Items -> Item Items
+    Items -> ''
+    Item -> Declaracion
+    Item -> Funcion
+    Declaracion -> Tipo Identificador DeclaracionTail ;
+    DeclaracionTail -> = Expresion
+    DeclaracionTail -> ''
+    Funcion -> Tipo Identificador ( Parametros ) Bloque
+    Parametros -> Tipo Identificador MasParametros
+    Parametros -> ''
+    MasParametros -> , Tipo Identificador MasParametros
+    MasParametros -> ''
+    Bloque -> { Sentencias }
+    Sentencias -> Sentencia Sentencias
+    Sentencias -> ''
+    Sentencia -> SentenciaM
+    Sentencia -> SentenciaU
+    SentenciaM -> Declaracion
+    SentenciaM -> Asignacion ;
+    SentenciaM -> While
+    SentenciaM -> Return ;
+    SentenciaM -> Bloque
+    SentenciaM -> if ( Expresion ) SentenciaM else SentenciaM
+    SentenciaU -> if ( Expresion ) Sentencia
+    SentenciaU -> if ( Expresion ) SentenciaM else SentenciaU
+    Asignacion -> Identificador = Expresion
+    While -> while ( Expresion ) Sentencia
+    Return -> return Expresion
+    Expresion -> Expresion + Termino
+    Expresion -> Expresion - Termino
+    Expresion -> Termino
+    Termino -> Termino * Factor
+    Termino -> Termino / Factor
+    Termino -> Factor
+    Factor -> ( Expresion )
+    Factor -> Identificador
+    Factor -> Numero
+    Factor -> Literal
+    Tipo -> int
+    Tipo -> float
+    Tipo -> double
+    Tipo -> char
+    Tipo -> bool
+    Tipo -> string
+    Tipo -> void
+    Identificador -> id
+    Numero -> num
+    Literal -> "texto"
     """
 
-    # Cadena de tokens a analizar (separados por espacio)
-    INPUT_STRING = "c d d"
+    INPUT_STRING = "int id ( ) { int id = num ; if ( id - num ) id = id + num ; else { id = id * num ; } return id ; }"
 
     print("--- PARSER LR(1) CON INPUT DINÁMICO ---")
     print(f"Gramática a analizar:\n{GRAMMAR_INPUT.strip()}")
@@ -488,53 +533,41 @@ C -> d
 
         # --- PARTE 2: IMPRIMIR RESULTADOS ---
 
-        print("--- 1. GRAMÁTICA AUMENTADA Y REGLAS ---")
-        for rule in results["grammar"]:
-            print(rule)
-        
-        print(f"\nTerminales: {', '.join(results['terminals'])}")
-        print(f"No-Terminales: {', '.join(results['non_terminals'])}")
-        print(f"Total de Estados: {results['num_states']}")
-
-        print("\n--- 2. COLECCIÓN CANÓNICA (ESTADOS) ---")
-        for state_name, items in results["states"].items():
-            print(f"\n{state_name}:")
-            for item in items:
-                print(f"  {item}")
-
         print("\n--- 3. TABLA ACTION ---")
-        term_cols = [t for t in results["terminals"] if t != EOF] + [EOF]
+        term_cols = sorted([t for t in results["terminals"] if t != EOF and t != EMPTY]) + [EOF]
         header = ["Estado"] + term_cols
-        print("| " + " | ".join(header) + " |")
-        print("|---" * (len(header)) + "|")
-        
+        print(f"| {' | '.join(f'{h:^8}' for h in header)} |")
+        print(f"|{'---------|' * len(header)}")
+
         for i in range(results["num_states"]):
-            row = [f"I{i}"]
+            row = [f"I{i:<7}"]
             for t in term_cols:
                 action = results["action_table"].get(i, {}).get(t, "")
-                row.append(action)
-            print("| " + " | ".join(row) + " |")
-            
+                row.append(f"{action:^8}")
+            print(f"| {' | '.join(row)} |")
+
         print("\n--- 4. TABLA GOTO ---")
-        nt_cols = [nt for nt in results["non_terminals"] if nt != analyzer.GRAMMAR[0][0]]
+        nt_cols = sorted([nt for nt in results["non_terminals"] if nt != analyzer.GRAMMAR[0][0]])
         header = ["Estado"] + nt_cols
-        print("| " + " | ".join(header) + " |")
-        print("|---" * (len(header)) + "|")
-        
+        print(f"| {' | '.join(f'{h:^15}' for h in header)} |")
+        print(f"|{'-----------------|' * len(header)}")
+
         for i in range(results["num_states"]):
-            row = [f"I{i}"]
+            row = [f"I{i:<14}"]
             for nt in nt_cols:
                 goto_state = results["goto_table"].get(i, {}).get(nt, "")
-                row.append(str(goto_state))
-            print("| " + " | ".join(row) + " |")
+                row.append(f"{str(goto_state):^15}")
+            print(f"| {' | '.join(row)} |")
 
         print("\n--- 5. TRAZA DEL PARSING ---")
-        print("Step |Pila | Entrada | Acción")
-        print("--- |--- | --- | ---")
-        i = 1
-        for step in results["trace"]:
-            print(f"{i}|{step['stack']} | {step['input']} | {step['action']}")
-            i+=1
+        # Find max widths for alignment
+        max_stack = max(len(s['stack']) for s in results['trace'])
+        max_input = max(len(s['input']) for s in results['trace'])
+
+        print(f"{'Step':<4} | {'Pila':<{max_stack}} | {'Entrada':<{max_input}} | Acción")
+        print(f"{'-' * 4}-+-{'-' * max_stack}-+-{'-' * max_input}-+-{'-' * 20}")
+        for i, step in enumerate(results["trace"]):
+            print(f"{i + 1:<4} | {step['stack']:<{max_stack}} | {step['input']:<{max_input}} | {step['action']}")
 
         # Resultado final
         final_action = results["trace"][-1]['action']
@@ -545,8 +578,6 @@ C -> d
             else:
                 print("No se pudo construir el árbol.")
             print("\n¡Análisis sintáctico finalizado con éxito! ")
-
-
         else:
             print("\n¡Error de análisis sintáctico!")
 
@@ -554,47 +585,3 @@ C -> d
         print(f"\nERROR: {e}")
     except Exception as e:
         print(f"\nERROR Inesperado durante el análisis: {e}")
-
-def serialize_ast_to_graph(root_node: ASTNode):
-    """
-    Recorre el AST (generado por ASTNode) y lo convierte en un formato de grafo
-    (lista de nodos y lista de aristas)
-    """
-    nodes = []
-    edges = []
-    _counter = 0
-
-    def traverse(node, parent_id=None):
-        nonlocal _counter
-        current_id = _counter
-        _counter += 1
-
-        # Formatear la etiqueta del nodo
-        node_label = node.symbol
-        if node.value:
-            # \n es interpretado por muchas librerías de grafos como un salto de línea
-            node_label += f"\n({node.value})"
-        
-        # Añadir el nodo a la lista
-        nodes.append({
-            "id": current_id, 
-            "label": node_label
-        })
-
-        # Si no es la raíz, crear un enlace desde su padre
-        if parent_id is not None:
-            edges.append({
-                "from": parent_id, 
-                "to": current_id
-            })
-        
-        # Recorrer los hijos
-        for child in node.children:
-            if isinstance(child, ASTNode):
-                traverse(child, current_id)
-    
-    # Iniciar el recorrido desde el nodo raíz
-    if root_node:
-        traverse(root_node)
-        
-    return {"nodes": nodes, "edges": edges}
