@@ -1,145 +1,84 @@
-# LR(1) Parser en C++
+# LR(1) Parser API
 
-Un **analizador sintáctico LR(1)** es un tipo de parser descendente que lee la entrada de izquierda a derecha (`L`), generando una derivación **derecha más a la izquierda** (`R`). El `(1)` indica que usa **una unidad de lookahead** para tomar decisiones. Este proyecto implementa un parser LR(1) completamente funcional en C++.
+Este proyecto expone un analizador sintáctico LR(1) como una API web usando FastAPI.
 
----
+Permite enviar una gramática y una cadena de entrada para recibir un análisis completo, incluyendo:
 
-## 🧩 Descripción General
-
-El proyecto implementa los siguientes componentes:
-
-1. **Representación de la gramática:**
-
-   * Define terminales, no terminales y producciones.
-   * Permite calcular los conjuntos **FIRST** y **FOLLOW**.
-
-2. **Construcción de autómata LR(1):**
-
-   * Genera los **conjuntos de elementos LR(1)**.
-   * Aplica la **clausura** y las **transiciones** de acuerdo con la teoría formal.
-
-3. **Tabla de parsing:**
-
-   * Construye las tablas **ACTION** y **GOTO**.
-   * Maneja conflictos (`shift/reduce`, `reduce/reduce`) mostrando advertencias.
-
-4. **Parsing de cadenas:**
-
-   * Simula la pila de parsing paso a paso.
-   * Muestra el proceso de análisis hasta aceptar o rechazar la entrada.
+* Tablas de análisis (ACTION/GOTO)
+* Traza paso a paso del parser
+* Árbol de Sintaxis Abstracta (AST)
 
 ---
 
-## ⚙️ Ejemplo de uso
+## ⚙️ Ejecución
 
-```cpp
-#include "LR1Parser.h"
+### 🧩 Requisitos
 
-int main() {
-    Grammar grammar;
-    grammar.addProduction("S", {"E"});
-    grammar.addProduction("E", {"E", "+", "T"});
-    grammar.addProduction("E", {"T"});
-    grammar.addProduction("T", {"id"});
+* Python 3.8+
+* pip
 
-    LR1Parser parser(grammar);
-    parser.build();
+---
 
-    parser.parse({"id", "+", "id", "$"});
-    return 0;
+### 🚀 Opcion 1: Ejecutar localmente
+
+1. Instala las dependencias:
+
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+2. Ejecuta el servidor:
+
+   ```bash
+   uvicorn main:app --reload
+   ```
+
+   Luego abre [http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs)
+
+---
+
+### 🐳 Opcion 2: Usar Docker
+
+1. Construye la imagen:
+
+   ```bash
+   docker build -t parser-api .
+   ```
+
+2. Corre el contenedor:
+
+   ```bash
+   docker run -d -p 8000:8000 --name lr1-server parser-api
+   ```
+
+El servidor estará disponible en `http://localhost:8000`.
+
+---
+
+## 🧪 Endpoint `/analyze`
+
+**URL:** `http://localhost:8000/analyze`
+**Método:** `POST`
+
+### 🔹 Ejemplo de petición JSON
+
+```json
+{
+  "grammar": "S -> C C\nC -> c C\nC -> d",
+  "input_string": "c d d"
 }
 ```
 
-### 🧠 Salida esperada
-
-```
-Construyendo tabla LR(1)... ✅
-Analizando: id + id $
-----------------------------------
-Pila		Entrada		Acción
-0		id + id $		Shift 5
-...
-Cadena aceptada ✔️
-```
-
----
-
-## 🧮 Detalles técnicos
-
-* **Cálculo de FIRST y FOLLOW:**
-
-  * Se usa un enfoque iterativo hasta alcanzar un punto fijo.
-* **Items LR(1):**
-
-  * Cada item se representa como `(A → α·β, a)`.
-* **Cierre:**
-
-  * Añade producciones que pueden ser derivadas del símbolo después del punto.
-* **Transiciones:**
-
-  * Genera nuevos conjuntos de items según el símbolo desplazado.
-
----
-
-## 🧪 Ejemplo de gramática
-
-```
-S → E
-E → E + T | T
-T → id
-```
-
-Tokens de entrada: `id + id $`
-
-### Proceso del parser
-
-1. **Shift id** → desplaza a la pila.
-2. **Reduce T → id**
-3. **Reduce E → T**
-4. **Shift +**
-5. **Shift id**
-6. **Reduce T → id**
-7. **Reduce E → E + T**
-8. **Acepta.**
-
----
-
-## 🧰 Compilación y ejecución
+### 🔹 Ejemplo de petición con cURL
 
 ```bash
-g++ -std=c++17 main.cpp LR1Parser.cpp Grammar.cpp -o parser
-./parser
+curl -X 'POST' \
+  'http://localhost:8000/analyze' \
+  -H 'accept: application/json' \
+  -H 'Content-Type: application/json' \
+  -d '{"grammar": "S -> C C\nC -> c C\nC -> d", "input_string": "c d d"}'
 ```
 
----
+### 🔹 Probar en el navegador
 
-## 🧭 Estructura conceptual
-
-```
-Grammar
- ├── NonTerminal
- ├── Terminal
- └── Production
-
-LR1Parser
- ├── Item (A → α·β, lookahead)
- ├── State (conjunto de Items)
- ├── Tables (ACTION, GOTO)
- └── Parsing Stack
-```
-
----
-
-## 📘 Recursos recomendados
-
-* **Alfred V. Aho**, *Compilers: Principles, Techniques, and Tools* (Dragon Book).
-* **Stanley B. Lippman**, *C++ Primer* — para la base del código.
-* **Jeffrey Ullman**, *Introduction to Automata Theory, Languages, and Computation*.
-
----
-
-## 🧠 Nota final
-
-El parser LR(1) es más potente que SLR o LR(0) porque utiliza **símbolos de anticipación** para distinguir contextos gramaticales ambiguos. Si bien su construcción es más compleja, garantiza una mayor precisión en el análisis sintáctico.
-
-> *"El orden y el caos coexisten en la tabla LR(1); solo un verdadero científico del tiempo podría interpretarla sin perder la cordura."*
+Abre [http://localhost:8000/docs](http://localhost:8000/docs) para usar la interfaz interactiva de FastAPI.
