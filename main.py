@@ -3,7 +3,6 @@
 import collections
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-from mangum import Mangum
 
 try:
     from analyzer import LR1Analyzer, ASTNode, serialize_ast_to_graph
@@ -85,7 +84,5 @@ async def run_analysis(request_data: AnalysisRequest):
             status_code=500,
             detail=f"Error inesperado en el análisis: {e}"
         )
-    
-handler = Mangum(app)
 
 # uvicorn main:app --reload
