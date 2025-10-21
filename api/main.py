@@ -3,6 +3,7 @@
 import collections
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
+from mangum import Mangum
 
 try:
     from analyzer import LR1Analyzer, ASTNode, serialize_ast_to_graph
