@@ -4,6 +4,5 @@
       "src": "main.py",
       "use": "@vercel/python"
     }
-  ],
-  "ignoreCommand": "exit 0"
+  ]
 }
