@@ -1,16 +1,15 @@
-# main.py
-
 import collections
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
 try:
+    # Esta importación ahora funcionará porque analyzer.py existe
     from analyzer import LR1Analyzer, ASTNode, serialize_ast_to_graph
 except ImportError:
-    print("ERROR: No se pudo encontrar el archivo 'analyzer.py'.")
+    print("ERROR: Asegúrate de que el archivo 'analyzer.py' está en la misma carpeta.")
     exit()
 
-#--- Definición del Servidor ---
+# --- Definición del Servidor ---
 app = FastAPI(
     title="LR(1) Parser API",
     description="Una API para generar tablas de análisis LR(1) y parsear cadenas."
@@ -19,22 +18,15 @@ app = FastAPI(
 
 # --- Modelo de Datos de Entrada ---
 class AnalysisRequest(BaseModel):
-    """Define la forma esperada del JSON en el body de la petición.
-    {
-        "grammar": "S -> C C\\nC -> c C\\nC -> d",
-        "input_string": "c d d"
-    }
-    Utiliza saltos de línea (\\n) para separar las producciones.
-    """
+    """Define la forma esperada del JSON en el body de la petición."""
     grammar: str
     input_string: str
 
-    # Ejemplo de cómo se vería el JSON
     class Config:
         schema_extra = {
             "example": {
-                "grammar": "S -> C C\nC -> c C\nC -> d",
-                "input_string": "c d d"
+                "grammar": "S -> C C\nC -> c C | d",
+                "input_string": "c d c d"
             }
         }
 
@@ -44,45 +36,42 @@ class AnalysisRequest(BaseModel):
 @app.post("/analyze")
 async def run_analysis(request_data: AnalysisRequest):
     """
-    Recibe la gramática y la cadena,
-    y devuelve el resultado completo del análisis.
+    Recibe la gramática y la cadena, y devuelve el resultado completo del análisis.
     """
-    
+
     try:
-        # Ejecutar el analizador LR(1)
+        # 1. Ejecutar el analizador LR(1)
         analyzer = LR1Analyzer(request_data.grammar)
         results = analyzer.analyze(request_data.input_string)
 
+        # 2. Procesar el AST para que sea JSON serializable
         ast_object = results.get("ast")
 
         if ast_object:
-            # Creamos la representación de texto (como antes)
             results["ast_string"] = str(ast_object)
-            # Creamos la nueva representación de GRAFO
             results["ast_graph"] = serialize_ast_to_graph(ast_object)
-            # Borramos el objeto AST original (que no es JSON serializable)
-            del results["ast"]
+            del results["ast"]  # El objeto original no es serializable
         else:
             results["ast_string"] = "No se generó AST."
-            # Devolvemos un grafo vacío
             results["ast_graph"] = {"nodes": [], "edges": []}
             if "ast" in results:
                 del results["ast"]
-        
+
+        # 3. Convertir defaultdicts a dicts normales para la respuesta JSON
         results["action_table"] = dict(results["action_table"])
         results["goto_table"] = dict(results["goto_table"])
 
         return results
 
     except ValueError as e:
+        # Captura errores de gramática (ej. conflictos S/R)
         raise HTTPException(
-            status_code=400,
-            detail=f"Error de Gramática: {e}"
+            status_code=400,  # Bad Request
+            detail=f"Error en la Gramática o el Análisis: {e}"
         )
     except Exception as e:
+        # Captura cualquier otro error inesperado
         raise HTTPException(
-            status_code=500,
-            detail=f"Error inesperado en el análisis: {e}"
+            status_code=500,  # Internal Server Error
+            detail=f"Error inesperado en el servidor: {e}"
         )
-
-# uvicorn main:app --reload
